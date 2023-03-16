@@ -2,18 +2,22 @@ import os
 import csv
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from sqlite3 import IntegrityError
+from typing import List
+
 from xml_parser import *
 from pathlib import Path
 from pprint import PrettyPrinter
-from sqlmodel import Field, Session, SQLModel, create_engine, select
-import pytest
+from sqlmodel import  Session, SQLModel, create_engine
 
 pp = PrettyPrinter(indent=2)
-engine = create_engine("sqlite:///clinical-trial.db")
+engine = create_engine("sqlite:///MQP-Clinical-Trials")
 SQLModel.metadata.create_all(engine)
 
+
+
 def traverse_folders():
-    path = "/Users/jff/Desktop/MQP/archive"
+    path = "/Users/Dimas/PycharmProjects/MQP_Clinical/archive"
     filelist = []
 
     for root, dirs, files in os.walk(path):
@@ -23,31 +27,103 @@ def traverse_folders():
             filelist.append(os.path.join(root, file))
 
 
-    # THIS LINES FOR TESTING
-    # for file in filelist:
-    #     dict0 = extract_xml(file)
-    #     main_dict = main_schema_dict(dict0)
-    #     pp.pprint(main_dict)
+    # REAL CODE IN HERE - FOR MAIN TABLE
 
-    # for file in filelist:
-    #     dict0 = extract_xml(file)
-    #     CTPdict = main_schema_dict(dict0)
-    #     add_CTPgeneral = MainTable(**CTPdict)
-    #     with Session(engine) as session:
-    #         session.add(add_CTPgeneral)
-    #         session.commit()
-    #         print(f"\n Added {file}")
+    for file in filelist:
+        dict0 = extract_xml(file)
+        CTPdict = main_schema_dict(dict0)
+        if CTPdict is None:
+            continue
 
+        # print(dict0)
+        print(CTPdict)
+
+
+        drug_ids = []
+        try:
+            drug_names = CTPdict.pop("drugs")
+            with Session(engine) as session:
+                if type(drug_names) == list:
+                    for drug_name in drug_names:
+                        drug = session.query(DrugTable).filter_by(drug_name=drug_name).first()
+                        if drug is not None:
+                            drug_ids.append(drug.id)
+                else:
+                    drug = session.query(DrugTable).filter_by(drug_name=drug_names).first()
+                    if drug is not None:
+                        drug_ids.append(drug.id)
+            print(f'{CTPdict["nct_id"]} - drugs ids are: {drug_ids}')
+        except KeyError:
+            print(f'{CTPdict["nct_id"]} - no drugs found in that xml file')
+
+        disease_ids = []
+        try:
+            disease_names = CTPdict.pop("diseases")
+            with Session(engine) as session:
+                if type(disease_names) == list:
+                    for disease_name in disease_names:
+                        disease = session.query(DiseaseTable).filter_by(disease_name=disease_name).first()
+                        if disease is not None:
+                            disease_ids.append(disease.id)
+                else:
+                    disease = session.query(DiseaseTable).filter_by(disease_name=disease_names).first()
+                    if disease is not None:
+                        disease_ids.append(disease.id)
+            print(f'{CTPdict["nct_id"]} - disease ids are: {disease_ids}')
+        except KeyError:
+            print(f'{CTPdict["nct_id"]} - no diseases found in that xml file')
+
+        # add MainTable entry with drug and disease ids
+        CTPentry = MainTable(**CTPdict)
+        with Session(engine) as session:
+            session.add(CTPentry)
+            session.flush()  # flush the session to ensure the CTPentry.id attribute is populated
+            # print(CTPentry)
+            print(f"\nAdded {file} with id {CTPentry.nct_id}")
+            if drug_ids:
+                for drug_id in drug_ids:
+                    relationship = MainTableDrugRelationship(main_table_id=CTPentry.nct_id, drug_table_id=drug_id)
+                    session.add(relationship)
+
+            if disease_ids:
+                for disease_id in disease_ids:
+                    relationship = MainTableDiseaseRelationship(main_table_id=CTPentry.nct_id, disease_table_id=disease_id)
+                    session.add(relationship)
+
+            session.commit()
+
+
+    # REAL CODE FOR DRUGS AND DISEASES DATABASE
 
     for i in filelist:
         dict0 = extract_xml(i)
-        drug_dict = drug_schema_dict(dict0)
-        for drug_entry in drug_dict:
-            add_drug = DrugTable(**drug_entry)
-            with Session(engine) as session:
-                session.add(add_drug)
-                session.commit()
+
+        if dict0 is None:
+            continue
+        disease_entry = disease_schema_dict(dict0)
+        with Session(engine) as session:
+            for entry in disease_entry:
+                disease = session.query(DiseaseTable).filter_by(disease_name=entry["disease_name"]).first()
+                if not disease:
+                    try:
+                        disease = DiseaseTable(disease_name=entry["disease_name"])
+                        session.add(disease)
+                        session.commit()
+                    except IntegrityError:
+                        session.rollback()
+                        disease = session.query(DiseaseTable).filter_by(disease_name=entry["disease_name"]).first()
         print(f"\n Added {i}")
+
+        for drug_entry in drug_schema_dict(dict0):
+            with Session(engine) as session:
+                drug = session.query(DrugTable).filter_by(drug_name=drug_entry['drug_name']).first()
+                if drug is None:
+                    # add new drug to database
+                    drug = DrugTable(drug_name=drug_entry['drug_name'])
+                    session.add(drug)
+                    session.commit()
+
+            print(f"\n Added {i}")
 
 
 def main():

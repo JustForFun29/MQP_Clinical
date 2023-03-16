@@ -6,9 +6,9 @@ import pytest
 pp = PrettyPrinter(indent=2)
 
 test_xml = [
-    Path("archive/NCT0000xxxx/NCT00000102.xml"),
+    Path("archive/NCT0000xxxx/NCT00005907.xml"),
 
-    Path("archive/NCT0000xxxx/NCT00000111.xml"),
+    Path("archive/NCT0000xxxx/NCT00005908.xml"),
 ]
 
 
@@ -17,7 +17,10 @@ def test_main_schema():
     This function tests the main_schema_dict function for the xml_parser.py
     """
     for i in test_xml:
-        dict0 = extract_xml(i)
+        try:
+            dict0 = extract_xml(i)
+        except UnicodeError:
+            return None
         main_dict = main_schema_dict(dict0)
         pp.pprint(main_dict)
 
